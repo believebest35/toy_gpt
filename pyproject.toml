@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinygpt"
+version = "0.1.0"
+description = "An educational implementation of a GPT-style language model."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+include = ["tinygpt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
