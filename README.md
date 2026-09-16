@@ -9,8 +9,10 @@ preparation, causal attention, a Transformer implementation, next-token
 pretraining, text generation, and evaluation. The model will be built from
 basic PyTorch primitives rather than a pretrained GPT implementation.
 
-The repository currently contains only the Phase 1 infrastructure: project
-setup, typed configuration loading, configuration validation, and tests.
+The repository currently contains Phase 1 infrastructure and the Phase 2
+text-to-token pipeline. Phase 2 provides TinyStories access, custom BPE
+tokenizer training, tokenizer serialization, and encoding/decoding utilities.
+Model training and tokenized dataset preprocessing have not been implemented.
 
 ## Setup
 
@@ -43,3 +45,27 @@ Run the tests:
 ```bash
 pytest
 ```
+
+## Phase 2 tokenizer
+
+Check access to TinyStories:
+
+```bash
+python scripts/download_data.py
+```
+
+Train the canonical tokenizer:
+
+```bash
+python scripts/train_tokenizer.py
+```
+
+For a limited development run:
+
+```bash
+python scripts/train_tokenizer.py --max-samples 10000
+```
+
+The canonical tokenizer is saved to
+`artifacts/tokenizer/tokenizer.json`. Tokenized dataset preparation and model
+training belong to later phases.
