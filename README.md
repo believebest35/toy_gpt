@@ -10,8 +10,9 @@ pretraining, text generation, and evaluation. The model will be built from
 basic PyTorch primitives rather than a pretrained GPT implementation.
 
 The repository currently contains Phase 1 infrastructure, the Phase 2
-text-to-token pipeline, and the Phase 3 language-model dataset pipeline.
-Model training and the GPT implementation have not been implemented.
+text-to-token pipeline, the Phase 3 language-model dataset pipeline, and the
+first Phase 4 model components. The full GPT model and model training have not
+been implemented.
 
 ## Setup
 
@@ -111,3 +112,25 @@ y = tokens[start + 1 : start + seq_len + 1]
 Stories are separated with EOS and are not padded, truncated, or shuffled.
 The GPT model, training loop, and training dataloader policy are still not
 implemented.
+
+## Phase 4 model components
+
+Phase 4 adds learned token embeddings, learned absolute positional embeddings,
+and explicit causal multi-head self-attention.
+
+The attention implementation is intentionally educational. Its forward pass
+exposes the main operations directly:
+
+```text
+Q, K, V
+    -> scaled QK^T
+    -> causal mask
+    -> softmax
+    -> weighted V
+    -> output projection
+```
+
+For an input with shape `[B, T, C]`, attention reshapes the projections into
+multiple heads, prevents each position from attending to future positions, and
+returns `[B, T, C]`. Transformer blocks, the MLP, the full GPT model, loss,
+and training are not implemented yet.
