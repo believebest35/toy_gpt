@@ -10,9 +10,9 @@ pretraining, text generation, and evaluation. The model will be built from
 basic PyTorch primitives rather than a pretrained GPT implementation.
 
 The repository currently contains Phase 1 infrastructure, the Phase 2
-text-to-token pipeline, the Phase 3 language-model dataset pipeline, and the
-first Phase 4 model components. The full GPT model and model training have not
-been implemented.
+text-to-token pipeline, the Phase 3 language-model dataset pipeline, the Phase
+4 attention components, and one Phase 5 Transformer block. The full GPT model
+and model training have not been implemented.
 
 ## Setup
 
@@ -132,5 +132,24 @@ Q, K, V
 
 For an input with shape `[B, T, C]`, attention reshapes the projections into
 multiple heads, prevents each position from attending to future positions, and
-returns `[B, T, C]`. Transformer blocks, the MLP, the full GPT model, loss,
-and training are not implemented yet.
+returns `[B, T, C]`.
+
+## Phase 5 Transformer block
+
+Phase 5 adds a GPT-style GELU feed-forward MLP and one Pre-LayerNorm
+Transformer block. The MLP expands the hidden dimension and projects it back:
+
+```text
+n_embd -> mlp_ratio * n_embd -> GELU -> n_embd
+```
+
+The block applies LayerNorm and residual connections in this order:
+
+```text
+x = x + Attention(LN(x))
+x = x + MLP(LN(x))
+```
+
+Only one reusable block is implemented. A stacked GPT model, final LayerNorm,
+LM head, weight tying, language-model loss, and training are still not
+implemented.
