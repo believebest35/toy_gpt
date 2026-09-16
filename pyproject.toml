@@ -13,6 +13,7 @@ dependencies = [
     "pyyaml",
     "datasets",
     "tokenizers",
+    "numpy",
 ]
 
 [project.optional-dependencies]
