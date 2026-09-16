@@ -1,9 +1,10 @@
-"""Embedding components for the educational TinyGPT model."""
+"""Model components for the educational TinyGPT model."""
 
 from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from .attention import CausalSelfAttention
 from .config import ModelConfig
@@ -73,4 +74,63 @@ class TransformerBlock(nn.Module):
         return x
 
 
-__all__ = ["GPTEmbedding", "GPTMLP", "TransformerBlock"]
+class GPT(nn.Module):
+    """A complete decoder-only GPT model without training orchestration."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.embedding = GPTEmbedding(config)
+        self.blocks = nn.ModuleList(
+            TransformerBlock(config) for _ in range(config.n_layer)
+        )
+        self.final_norm = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+        self.lm_head.weight = self.embedding.token_embedding.weight
+
+    @staticmethod
+    def _init_weights(module: nn.Module) -> None:
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        targets: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if targets is not None:
+            if targets.ndim != 2 or targets.shape != token_ids.shape:
+                raise ValueError("targets must have the same shape [B, T] as token_ids")
+            if targets.dtype != torch.long:
+                raise ValueError("targets must have dtype torch.long")
+
+        hidden_states = self.embedding(token_ids)
+        for block in self.blocks:
+            hidden_states = block(hidden_states)
+
+        hidden_states = self.final_norm(hidden_states)
+        logits = self.lm_head(hidden_states)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size),
+                targets.reshape(-1),
+            )
+
+        return logits, loss
+
+    def num_parameters(self) -> int:
+        """Return the number of unique trainable and non-trainable parameters."""
+
+        return sum(parameter.numel() for parameter in self.parameters())
+
+
+__all__ = ["GPT", "GPTEmbedding", "GPTMLP", "TransformerBlock"]

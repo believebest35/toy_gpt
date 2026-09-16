@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from tinygpt import load_config
-from tinygpt.model import GPTEmbedding, GPTMLP, TransformerBlock
+from tinygpt.dataset import GPTDataset
+from tinygpt.model import GPT, GPTEmbedding, GPTMLP, TransformerBlock
 
 
 ROOT = Path(__file__).parents[1]
@@ -238,3 +241,160 @@ def test_transformer_block_eval_is_deterministic() -> None:
         second_output = block(hidden_states)
 
     torch.testing.assert_close(first_output, second_output)
+
+
+def test_gpt_contains_expected_components_and_block_count() -> None:
+    model = GPT(DEBUG_CONFIG)
+
+    assert isinstance(model.embedding, GPTEmbedding)
+    assert isinstance(model.blocks, nn.ModuleList)
+    assert len(model.blocks) == DEBUG_CONFIG.n_layer
+    assert all(isinstance(block, TransformerBlock) for block in model.blocks)
+    assert isinstance(model.final_norm, nn.LayerNorm)
+    assert isinstance(model.lm_head, nn.Linear)
+
+
+def test_gpt_returns_logits_without_loss() -> None:
+    model = GPT(DEBUG_CONFIG)
+    token_ids = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 16))
+
+    logits, loss = model(token_ids)
+
+    assert logits.shape == (2, 16, DEBUG_CONFIG.vocab_size)
+    assert torch.isfinite(logits).all()
+    assert loss is None
+
+
+def test_gpt_computes_unshifted_cross_entropy_loss() -> None:
+    model = GPT(DEBUG_CONFIG)
+    token_ids = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 16))
+    targets = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 16))
+
+    logits, loss = model(token_ids, targets)
+
+    assert loss is not None
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    expected_loss = F.cross_entropy(
+        logits.reshape(-1, DEBUG_CONFIG.vocab_size),
+        targets.reshape(-1),
+    )
+    torch.testing.assert_close(loss, expected_loss)
+
+
+def test_gpt_lm_head_ties_token_embedding_weight() -> None:
+    model = GPT(DEBUG_CONFIG)
+
+    assert model.lm_head.weight is model.embedding.token_embedding.weight
+    assert model.lm_head.bias is None
+
+
+def test_gpt_causal_invariance_for_prefix_logits() -> None:
+    torch.manual_seed(0)
+    model = GPT(DEBUG_CONFIG).eval()
+    first = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 8))
+    second = first.clone()
+    second[:, 4:] = (second[:, 4:] + 1) % DEBUG_CONFIG.vocab_size
+
+    with torch.no_grad():
+        first_logits, _ = model(first)
+        second_logits, _ = model(second)
+
+    torch.testing.assert_close(
+        first_logits[:, :4, :],
+        second_logits[:, :4, :],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+def test_gpt_backward_reaches_all_major_component_groups() -> None:
+    torch.manual_seed(0)
+    model = GPT(DEBUG_CONFIG)
+    token_ids = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 8))
+    targets = torch.randint(0, DEBUG_CONFIG.vocab_size, (2, 8))
+
+    _, loss = model(token_ids, targets)
+    assert loss is not None
+    loss.backward()
+
+    gradient_groups = (
+        model.embedding.token_embedding.weight.grad,
+        model.embedding.position_embedding.weight.grad,
+        model.blocks[0].attention.qkv_proj.weight.grad,
+        model.blocks[0].mlp.fc1.weight.grad,
+        model.final_norm.weight.grad,
+        model.lm_head.weight.grad,
+    )
+    assert all(gradient is not None for gradient in gradient_groups)
+    assert all(torch.isfinite(gradient).all() for gradient in gradient_groups if gradient is not None)
+
+
+def test_gpt_initialization_invariants() -> None:
+    model = GPT(DEBUG_CONFIG)
+
+    for module in model.modules():
+        if isinstance(module, nn.Linear):
+            assert torch.isfinite(module.weight).all()
+            if module.bias is not None:
+                torch.testing.assert_close(module.bias, torch.zeros_like(module.bias))
+        elif isinstance(module, nn.Embedding):
+            assert torch.isfinite(module.weight).all()
+        elif isinstance(module, nn.LayerNorm):
+            torch.testing.assert_close(module.weight, torch.ones_like(module.weight))
+            torch.testing.assert_close(module.bias, torch.zeros_like(module.bias))
+
+
+def test_gpt_handles_single_and_maximum_sequence_lengths() -> None:
+    model = GPT(DEBUG_CONFIG)
+
+    for sequence_length in (1, DEBUG_CONFIG.max_seq_len):
+        token_ids = torch.randint(
+            0,
+            DEBUG_CONFIG.vocab_size,
+            (2, sequence_length),
+        )
+        targets = torch.randint(
+            0,
+            DEBUG_CONFIG.vocab_size,
+            (2, sequence_length),
+        )
+
+        logits, loss = model(token_ids, targets)
+
+        assert logits.shape == (2, sequence_length, DEBUG_CONFIG.vocab_size)
+        assert loss is not None and loss.ndim == 0
+        assert torch.isfinite(logits).all()
+        assert torch.isfinite(loss)
+
+
+def test_gpt_rejects_invalid_targets() -> None:
+    model = GPT(DEBUG_CONFIG)
+    token_ids = torch.zeros((2, 8), dtype=torch.long)
+
+    with pytest.raises(ValueError, match="same shape"):
+        model(token_ids, torch.zeros((2, 7), dtype=torch.long))
+    with pytest.raises(ValueError, match="torch.long"):
+        model(token_ids, torch.zeros((2, 8), dtype=torch.int32))
+
+
+def test_gpt_accepts_gpt_dataset_batches(tmp_path: Path) -> None:
+    token_path = tmp_path / "tokens.bin"
+    np.arange(32, dtype=np.uint16).tofile(token_path)
+    dataset = GPTDataset(token_path, seq_len=8)
+    token_ids, targets = dataset[0]
+    model = GPT(DEBUG_CONFIG)
+
+    logits, loss = model(token_ids.unsqueeze(0), targets.unsqueeze(0))
+
+    assert logits.shape == (1, 8, DEBUG_CONFIG.vocab_size)
+    assert loss is not None and loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
+def test_gpt_parameter_count_includes_tied_weight_once() -> None:
+    model = GPT(DEBUG_CONFIG)
+
+    assert model.num_parameters() == sum(
+        parameter.numel() for parameter in model.parameters()
+    )

@@ -11,8 +11,8 @@ basic PyTorch primitives rather than a pretrained GPT implementation.
 
 The repository currently contains Phase 1 infrastructure, the Phase 2
 text-to-token pipeline, the Phase 3 language-model dataset pipeline, the Phase
-4 attention components, and one Phase 5 Transformer block. The full GPT model
-and model training have not been implemented.
+4 attention components, the Phase 5 Transformer block, and the Phase 6 full
+TinyGPT model. Model training and text generation have not been implemented.
 
 ## Setup
 
@@ -110,8 +110,7 @@ y = tokens[start + 1 : start + seq_len + 1]
 ```
 
 Stories are separated with EOS and are not padded, truncated, or shuffled.
-The GPT model, training loop, and training dataloader policy are still not
-implemented.
+The training loop and training dataloader policy are still not implemented.
 
 ## Phase 4 model components
 
@@ -150,6 +149,18 @@ x = x + Attention(LN(x))
 x = x + MLP(LN(x))
 ```
 
-Only one reusable block is implemented. A stacked GPT model, final LayerNorm,
-LM head, weight tying, language-model loss, and training are still not
-implemented.
+The block is reusable inside the complete model added in Phase 6.
+
+## Phase 6 complete TinyGPT model
+
+Phase 6 stacks `TransformerBlock` modules into a decoder-only GPT model with a
+final LayerNorm and a biasless language-model head. The head shares the same
+Parameter as the token embedding, and the forward pass returns logits with
+shape `[B, T, vocab_size]`. Passing shifted dataset targets additionally
+returns a token-level cross-entropy loss; the model does not shift targets a
+second time.
+
+The model includes GPT-style weight initialization and supports ordinary
+forward and backward passes. Training loops, optimizers, schedulers, mixed
+precision, checkpointing, text generation, KV caching, and FlashAttention are
+intentionally deferred to later phases.
