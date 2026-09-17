@@ -164,3 +164,20 @@ The model includes GPT-style weight initialization and supports ordinary
 forward and backward passes. Training loops, optimizers, schedulers, mixed
 precision, checkpointing, text generation, KV caching, and FlashAttention are
 intentionally deferred to later phases.
+
+## Phase 7 one-batch overfit sanity check
+
+Phase 7 verifies that the complete GPT can learn through gradient descent. The
+sanity-check script loads `configs/debug.yaml` and the local `data/train.bin`,
+builds one fixed batch, and trains on that same batch with AdamW:
+
+```bash
+python scripts/overfit_batch.py
+```
+
+The script prints the device, batch shape, initial loss, periodic losses, and
+final loss. It does not download data or implement the full pretraining loop.
+The canonical `data/train.bin` uses the 8192-token tokenizer while the debug
+model has a 256-token vocabulary, so this debug-only script maps the selected
+token IDs modulo 256 before training. The dataset files themselves are not
+modified.
