@@ -17,6 +17,7 @@ def generate(
     *,
     do_sample: bool = False,
     temperature: float = 1.0,
+    top_k: int | None = None,
     eos_token_id: int | None = None,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
@@ -38,6 +39,11 @@ def generate(
         raise ValueError("max_new_tokens must be non-negative")
     if not math.isfinite(temperature) or temperature <= 0.0:
         raise ValueError("temperature must be finite and greater than 0")
+    if top_k is not None:
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise ValueError("top_k must be an integer")
+        if not 0 < top_k <= model.config.vocab_size:
+            raise ValueError("top_k must be inside the model vocabulary")
     if eos_token_id is not None and not 0 <= eos_token_id < model.config.vocab_size:
         raise ValueError("eos_token_id must be inside the model vocabulary")
 
@@ -65,7 +71,19 @@ def generate(
             next_token_logits = logits[:, -1, :] / temperature
 
             if do_sample:
-                probabilities = torch.softmax(next_token_logits, dim=-1)
+                sampling_logits = next_token_logits
+                if top_k is not None:
+                    top_k_logits = torch.topk(
+                        sampling_logits,
+                        k=top_k,
+                        dim=-1,
+                    ).values
+                    top_k_threshold = top_k_logits[:, [-1]]
+                    sampling_logits = sampling_logits.masked_fill(
+                        sampling_logits < top_k_threshold,
+                        float("-inf"),
+                    )
+                probabilities = torch.softmax(sampling_logits, dim=-1)
                 next_token = torch.multinomial(
                     probabilities,
                     num_samples=1,

@@ -52,3 +52,26 @@ def test_generate_rejects_invalid_arguments() -> None:
         generate(model, prompt, max_new_tokens=-1)
     with pytest.raises(ValueError, match="temperature"):
         generate(model, prompt, max_new_tokens=1, temperature=0.0)
+    with pytest.raises(ValueError, match="top_k"):
+        generate(model, prompt, max_new_tokens=1, do_sample=True, top_k=0)
+
+
+def test_generate_supports_temperature_and_top_k_sampling() -> None:
+    torch.manual_seed(0)
+    model = GPT(GENERATION_CONFIG).eval()
+    prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generator = torch.Generator().manual_seed(7)
+
+    output = generate(
+        model,
+        prompt,
+        max_new_tokens=4,
+        do_sample=True,
+        temperature=0.8,
+        top_k=4,
+        generator=generator,
+    )
+
+    assert output.shape == (1, 7)
+    assert torch.equal(output[:, :3], prompt)
+    assert torch.all((output >= 0) & (output < GENERATION_CONFIG.vocab_size))

@@ -28,6 +28,8 @@ DEFAULT_PROMPT = "Once upon a time"
 DEFAULT_STEPS = 1000
 DEFAULT_GENERATION_INTERVAL = 500
 DEFAULT_MAX_NEW_TOKENS = 40
+DEFAULT_TEMPERATURE = 0.8
+DEFAULT_TOP_K = 40
 DEFAULT_SEED = 0
 
 
@@ -80,20 +82,71 @@ def print_generation(
     prompt_ids: torch.Tensor,
     eos_token_id: int | None,
     step: int,
+    strategy_name: str,
     max_new_tokens: int,
+    do_sample: bool,
+    temperature: float,
+    top_k: int | None,
+    seed: int,
 ) -> None:
+    generator = None
+    if do_sample:
+        generator = torch.Generator(device=prompt_ids.device.type).manual_seed(seed)
     generated_ids = generate(
         model,
         prompt_ids,
         max_new_tokens=max_new_tokens,
+        do_sample=do_sample,
+        temperature=temperature,
+        top_k=top_k,
         eos_token_id=eos_token_id,
+        generator=generator,
     )
     generated_text = tokenizer.decode(
         generated_ids[0].tolist(),
         skip_special_tokens=True,
     )
-    print(f"\n===== generation at step {step} =====", flush=True)
+    print(
+        f"\n===== generation at step {step} ({strategy_name}) =====",
+        flush=True,
+    )
     print(generated_text, flush=True)
+
+
+def print_checkpoint_generations(
+    model: GPT,
+    tokenizer: object,
+    prompt_ids: torch.Tensor,
+    eos_token_id: int | None,
+    step: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    seed: int,
+) -> None:
+    """Compare multiple decoding strategies at one unchanged checkpoint."""
+
+    strategies = (
+        ("greedy", False, 1.0, None),
+        (f"temperature={temperature}", True, temperature, None),
+        (f"top_k={top_k}", True, 1.0, top_k),
+    )
+    for strategy_index, (name, do_sample, strategy_temperature, strategy_top_k) in enumerate(
+        strategies
+    ):
+        print_generation(
+            model,
+            tokenizer,
+            prompt_ids,
+            eos_token_id,
+            step,
+            name,
+            max_new_tokens,
+            do_sample=do_sample,
+            temperature=strategy_temperature,
+            top_k=strategy_top_k,
+            seed=seed + step + strategy_index,
+        )
 
 
 def run_demo(
@@ -104,6 +157,8 @@ def run_demo(
     steps: int = DEFAULT_STEPS,
     generation_interval: int = DEFAULT_GENERATION_INTERVAL,
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    top_k: int = DEFAULT_TOP_K,
     seed: int = DEFAULT_SEED,
     device_name: str = "auto",
 ) -> None:
@@ -112,8 +167,12 @@ def run_demo(
     generation_steps = generation_schedule(steps, generation_interval)
     if max_new_tokens < 0:
         raise ValueError("max_new_tokens must be non-negative")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be greater than 0")
 
     config = load_config(config_path)
+    if top_k <= 0 or top_k > config.model.vocab_size:
+        raise ValueError("top_k must be inside the model vocabulary")
     tokenizer = load_tokenizer(tokenizer_path)
     dataset = GPTDataset(train_data_path, seq_len=config.data.seq_len)
     device = resolve_device(device_name)
@@ -143,13 +202,16 @@ def run_demo(
     print(f"prompt token IDs: {prompt_ids[0].tolist()}", flush=True)
     print(f"training steps: {steps}", flush=True)
     print(f"generation steps: {generation_steps}", flush=True)
-    print_generation(
+    print_checkpoint_generations(
         model,
         tokenizer,
         prompt_ids,
         eos_token_id,
         step=0,
         max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        seed=seed,
     )
 
     model.train()
@@ -169,13 +231,16 @@ def run_demo(
 
         if step in generation_steps:
             print(f"training loss at step {step}: {loss.item():.6f}", flush=True)
-            print_generation(
+            print_checkpoint_generations(
                 model,
                 tokenizer,
                 prompt_ids,
                 eos_token_id,
                 step=step,
                 max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_k=top_k,
+                seed=seed,
             )
 
 
@@ -189,6 +254,8 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_GENERATION_INTERVAL,
     )
     parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
         "--device",
@@ -202,6 +269,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--generation-interval must be greater than 0")
     if args.max_new_tokens < 0:
         parser.error("--max-new-tokens must be non-negative")
+    if args.temperature <= 0.0:
+        parser.error("--temperature must be greater than 0")
+    if args.top_k <= 0:
+        parser.error("--top-k must be greater than 0")
     return args
 
 
@@ -212,6 +283,8 @@ def main() -> None:
         steps=args.steps,
         generation_interval=args.generation_interval,
         max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
         seed=args.seed,
         device_name=args.device,
     )

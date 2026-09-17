@@ -26,6 +26,7 @@ DEFAULT_STEPS = 3000
 DEFAULT_EVAL_EVERY = 100
 DEFAULT_EVAL_STEPS = 20
 DEFAULT_SEED = 0
+DEFAULT_VALIDATION_SEED = 20260917
 
 
 def batch_from_indices(
@@ -57,36 +58,56 @@ def random_batch(
     return batch_from_indices(dataset, indices)
 
 
+def sample_validation_batches(
+    dataset_size: int,
+    batch_size: int,
+    max_batches: int,
+    seed: int,
+) -> list[list[int]]:
+    """Sample fixed, non-contiguous validation batches from the full dataset."""
+
+    if dataset_size <= 0:
+        raise ValueError("dataset_size must be greater than 0")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than 0")
+    if max_batches <= 0:
+        raise ValueError("max_batches must be greater than 0")
+
+    batch_count = min(max_batches, dataset_size // batch_size)
+    if batch_count == 0:
+        raise ValueError("validation dataset does not contain a complete batch")
+
+    generator = torch.Generator().manual_seed(seed)
+    total_indices = batch_count * batch_size
+    indices = torch.randperm(dataset_size, generator=generator)[:total_indices]
+    return [
+        indices[start : start + batch_size].tolist()
+        for start in range(0, total_indices, batch_size)
+    ]
+
+
 @torch.no_grad()
 def validation_loss(
     model: GPT,
     dataset: GPTDataset,
-    batch_size: int,
-    max_batches: int,
+    validation_batches: list[list[int]],
     device: torch.device,
 ) -> float:
-    """Evaluate on a deterministic prefix of the validation stream."""
+    """Evaluate on one fixed random sample of validation batches."""
 
     was_training = model.training
     model.eval()
     try:
         losses: list[torch.Tensor] = []
-        for batch_index in range(max_batches):
-            start = batch_index * batch_size
-            end = start + batch_size
-            if end > len(dataset):
-                break
-            token_ids, targets = batch_from_indices(
-                dataset,
-                list(range(start, end)),
-            )
+        for indices in validation_batches:
+            token_ids, targets = batch_from_indices(dataset, indices)
             _, loss = model(token_ids.to(device), targets.to(device))
             if loss is None:
                 raise RuntimeError("GPT returned no loss for validation targets")
             losses.append(loss.detach())
 
         if not losses:
-            raise ValueError("validation dataset does not contain a complete batch")
+            raise ValueError("validation batches must not be empty")
         return torch.stack(losses).mean().item()
     finally:
         model.train(was_training)
@@ -108,6 +129,7 @@ def run_training(
     eval_every: int = DEFAULT_EVAL_EVERY,
     eval_steps: int = DEFAULT_EVAL_STEPS,
     seed: int = DEFAULT_SEED,
+    validation_seed: int = DEFAULT_VALIDATION_SEED,
     device_name: str = "auto",
 ) -> list[tuple[int, float, float]]:
     """Run small real training and return step/train-loss/val-loss records."""
@@ -123,6 +145,12 @@ def run_training(
     train_dataset = GPTDataset(train_data_path, seq_len=config.data.seq_len)
     val_dataset = GPTDataset(val_data_path, seq_len=config.data.seq_len)
     batch_size = config.training.batch_size
+    validation_batches = sample_validation_batches(
+        len(val_dataset),
+        batch_size,
+        eval_steps,
+        validation_seed,
+    )
     device = resolve_device(device_name)
 
     torch.manual_seed(seed)
@@ -142,7 +170,9 @@ def run_training(
     print(f"batch size: {batch_size}", flush=True)
     print(f"sequence length: {config.data.seq_len}", flush=True)
     print(f"training steps: {steps}", flush=True)
-    print(f"validation batches: {eval_steps}", flush=True)
+    print(f"validation batches: {len(validation_batches)}", flush=True)
+    print(f"validation sampling seed: {validation_seed}", flush=True)
+    print("validation sampling: fixed random indices across the full dataset", flush=True)
 
     model.train()
     initial_train_ids, initial_train_targets = random_batch(
@@ -158,8 +188,7 @@ def run_training(
     initial_val_loss = validation_loss(
         model,
         val_dataset,
-        batch_size,
-        eval_steps,
+        validation_batches,
         device,
     )
     initial_train_loss = initial_train_loss_tensor.item()
@@ -197,8 +226,7 @@ def run_training(
             val_loss = validation_loss(
                 model,
                 val_dataset,
-                batch_size,
-                eval_steps,
+                validation_batches,
                 device,
             )
             records.append((step, mean_train_loss, val_loss))

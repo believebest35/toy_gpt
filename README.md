@@ -193,9 +193,10 @@ python scripts/train_small.py
 
 This uses `configs/tiny.yaml`, the local `data/train.bin` and `data/val.bin`,
 AdamW, and 3000 optimization steps by default. Validation loss is measured on
-the first 20 validation batches every 100 steps. The experiment is intentionally
-small and has no scheduler, checkpointing, gradient accumulation, or full
-pretraining loop.
+20 fixed random validation batches sampled without replacement from the full
+validation stream every 100 steps. The experiment is intentionally small and
+has no scheduler, checkpointing, gradient accumulation, or full pretraining
+loop.
 
 ## Simple generation demo
 
@@ -207,7 +208,9 @@ through step 3000:
 python scripts/train_generate.py --steps 3000 --generation-interval 500
 ```
 
-The default prompt is `Once upon a time`. Generation is greedy and limited to
-40 new tokens, so the output is deterministic for the fixed training seed. The
-default run uses 1000 training steps, which produces generations at steps 0,
-500, and 1000.
+The default prompt is `Once upon a time`. At each checkpoint the demo prints
+three decoders using the same model weights: greedy decoding, temperature
+sampling with temperature `0.8`, and top-k sampling with `k=40`. Sampling uses
+fixed per-checkpoint seeds for reproducibility. Generation is limited to 40 new
+tokens. The default run uses 1000 training steps, which produces comparisons at
+steps 0, 500, and 1000.
