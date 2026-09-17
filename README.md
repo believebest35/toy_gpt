@@ -11,8 +11,8 @@ basic PyTorch primitives rather than a pretrained GPT implementation.
 
 The repository currently contains Phase 1 infrastructure, the Phase 2
 text-to-token pipeline, the Phase 3 language-model dataset pipeline, the Phase
-4 attention components, the Phase 5 Transformer block, and the Phase 6 full
-TinyGPT model. Model training and text generation have not been implemented.
+4 attention components, the Phase 5 Transformer block, the Phase 6 full
+TinyGPT model, and Phase 7 training/generation infrastructure.
 
 ## Setup
 
@@ -67,7 +67,8 @@ python scripts/train_tokenizer.py --max-samples 10000
 ```
 
 The canonical tokenizer is saved to
-`artifacts/tokenizer/tokenizer.json`. Model training belongs to later phases.
+`artifacts/tokenizer/tokenizer.json`. The training scripts use this local
+artifact and do not download it again.
 
 ## Phase 3 tokenized dataset
 
@@ -110,7 +111,7 @@ y = tokens[start + 1 : start + seq_len + 1]
 ```
 
 Stories are separated with EOS and are not padded, truncated, or shuffled.
-The training loop and training dataloader policy are still not implemented.
+Training scripts sample windows from these memory-mapped streams.
 
 ## Phase 4 model components
 
@@ -161,9 +162,9 @@ returns a token-level cross-entropy loss; the model does not shift targets a
 second time.
 
 The model includes GPT-style weight initialization and supports ordinary
-forward and backward passes. Training loops, optimizers, schedulers, mixed
-precision, checkpointing, text generation, KV caching, and FlashAttention are
-intentionally deferred to later phases.
+forward and backward passes. Training infrastructure is added in Phase 7;
+mixed precision, schedulers, distributed training, KV caching, and
+FlashAttention remain intentionally deferred.
 
 ## Phase 7 one-batch overfit sanity check
 
@@ -194,9 +195,8 @@ python scripts/train_small.py
 This uses `configs/tiny.yaml`, the local `data/train.bin` and `data/val.bin`,
 AdamW, and 3000 optimization steps by default. Validation loss is measured on
 20 fixed random validation batches sampled without replacement from the full
-validation stream every 100 steps. The experiment is intentionally small and
-has no scheduler, checkpointing, gradient accumulation, or full pretraining
-loop.
+validation stream every 100 steps. This script remains a lightweight
+experiment without checkpointing or resume support.
 
 ## Simple generation demo
 
@@ -205,7 +205,14 @@ cache. To retrain the small model and inspect the same prompt every 500 steps
 through step 3000:
 
 ```bash
-python scripts/train_generate.py --steps 3000 --generation-interval 500
+python scripts/train_generate.py \
+  --steps 3000 \
+  --eval-interval 500 \
+  --eval-batches 20 \
+  --save-interval 500 \
+  --checkpoint-dir checkpoints \
+  --generation-interval 500 \
+  --seed 1337
 ```
 
 The default prompt is `Once upon a time`. At each checkpoint the demo prints
@@ -214,3 +221,24 @@ sampling with temperature `0.8`, and top-k sampling with `k=40`. Sampling uses
 fixed per-checkpoint seeds for reproducibility. Generation is limited to 40 new
 tokens. The default run uses 1000 training steps, which produces comparisons at
 steps 0, 500, and 1000.
+
+The same command saves `checkpoints/step_000500.pt`, numbered checkpoints at
+later save steps, and `checkpoints/latest.pt`. Resume to a final global step
+with:
+
+```bash
+python scripts/train_generate.py \
+  --steps 3000 \
+  --resume checkpoints/latest.pt \
+  --eval-interval 500 \
+  --eval-batches 20 \
+  --save-interval 500 \
+  --checkpoint-dir checkpoints \
+  --generation-interval 500 \
+  --seed 1337
+```
+
+Validation runs under `torch.no_grad()`, uses a fixed random sample from the
+full validation stream, and restores the model's training mode afterwards.
+Checkpoints contain model and optimizer state, global step, model/data/training
+configuration, and the random states needed to continue sampling batches.
