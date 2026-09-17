@@ -181,3 +181,33 @@ The canonical `data/train.bin` uses the 8192-token tokenizer while the debug
 model has a 256-token vocabulary, so this debug-only script maps the selected
 token IDs modulo 256 before training. The dataset files themselves are not
 modified.
+
+## Small real-training experiment
+
+To train on continuously sampled, different batches from the canonical
+`GPTDataset` while monitoring validation loss, run:
+
+```bash
+python scripts/train_small.py
+```
+
+This uses `configs/tiny.yaml`, the local `data/train.bin` and `data/val.bin`,
+AdamW, and 3000 optimization steps by default. Validation loss is measured on
+the first 20 validation batches every 100 steps. The experiment is intentionally
+small and has no scheduler, checkpointing, gradient accumulation, or full
+pretraining loop.
+
+## Simple generation demo
+
+The model can now generate text with repeated full forward passes and no KV
+cache. To retrain the small model and inspect the same prompt every 500 steps
+through step 3000:
+
+```bash
+python scripts/train_generate.py --steps 3000 --generation-interval 500
+```
+
+The default prompt is `Once upon a time`. Generation is greedy and limited to
+40 new tokens, so the output is deterministic for the fixed training seed. The
+default run uses 1000 training steps, which produces generations at steps 0,
+500, and 1000.
